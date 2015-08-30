@@ -46,6 +46,7 @@ var DEBUG = false,
     HIGHLIGHT_COLOR = '#ffcc33',
     TRUNCATION_LENGTH = 80,
     ENTRY_PER_PAGE = 20,
+    MAX_CONCURRENT_LOAD = 3,
     SEARCH_BOX_ID = 'search_box',
     SEARCH_CREDIT_ID = 'search_credit';
 //}
@@ -55,6 +56,9 @@ var DEBUG = false,
 var page_counter = 0,
     backnumber_url_list = [],
     entries = [],
+    request_page_counter = 0,
+    loaded_backnumber = {},
+    backnumber_queue = [],
     matched_url = {},
     search_keyword = '',
     result_content = null,
@@ -70,12 +74,23 @@ var page_counter = 0,
 
 
 //{ ■ 関数
-function debug_log(string) {
-    if ( ! DEBUG ) {
-        return;
-    }
-    console.log( string );
-} // end of debug_log()
+var debug_log = (function() {
+    function zero_padding(num, len){
+        return ('0000000000' + num).slice(-len);
+    };
+    
+    function get_timestamp() {
+        var date = new Date();
+        return zero_padding(date.getHours(), 2) + ':' + zero_padding(date.getMinutes(), 2) + ':' + zero_padding(date.getSeconds(), 2) + '.' + zero_padding(date.getMilliseconds(), 3);
+    };
+    
+    return function( string ) {
+        if ( ! DEBUG ) {
+            return;
+        }
+        console.log( '[' + get_timestamp() + ']', string );
+    };
+})(); // end of debug_log()
 
 
 function trunc_spaces( string ) {
@@ -112,7 +127,6 @@ function getContentContainer( root ) {
     else {
         content = root.find('#center div.content').first();
     }
-    content.addClass('search-result-container');
     
     if ( content.size() < 1 ) {
         content = null;
@@ -168,48 +182,47 @@ function getRegKeywords( keywords ) {
 } // end of getRegKeywords()
 
 
-function getInnerBody( html ) {
-    return html.replace(/(^[\s\S]*?<body[^>]*>|<\/body>(?![\s\S]*<\/body>)[\s\S]*$)/gi, '');
-} // end of getInnerBody()
-
-
 var getDocument = (function() {
     if ( ( document.implementation ) && ( document.implementation.createHTMLDocument ) ) {
-        var htmlDoc=document.implementation.createHTMLDocument('');
+        var htmlDoc = document.implementation.createHTMLDocument('');
     }
     else if ( typeof XSLTProcessor != 'undefined' ) {
-        var proc=new XSLTProcessor();
-        var xsltStyleSheet=new DOMParser().parseFromString([
-            '<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0">'
-        ,       '<xsl:output method="html" />'
-        ,       '<xsl:template match="/">'
-        ,           '<html><head><title></title></head><body></body></html>'
-        ,       '</xsl:template>'
-        ,   '</xsl:stylesheet>'
-        ].join(''),'application/xml');
+        var proc = new XSLTProcessor(),
+            xsltStyleSheet = new DOMParser().parseFromString([
+                '<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0">'
+            ,       '<xsl:output method="html" />'
+            ,       '<xsl:template match="/">'
+            ,           '<html><head><title></title></head><body></body></html>'
+            ,       '</xsl:template>'
+            ,   '</xsl:stylesheet>'
+            ].join(''), 'application/xml');
         proc.importStylesheet(xsltStyleSheet);
-        var htmlDoc=proc.transformToDocument(xsltStyleSheet);
+        var htmlDoc = proc.transformToDocument( xsltStyleSheet );
     }
     else {
         if ( typeof ActiveXObject != 'undefined' ) {
             return function( html ) {
-                var htmlDoc=new ActiveXObject('htmlfile');
-                htmlDoc.designMode='on';
-                htmlDoc.open('text/html');
-                htmlDoc.write(html);
+                var htmlDoc = new ActiveXObject( 'htmlfile' );
+                htmlDoc.designMode = 'on';
+                htmlDoc.open( 'text/html' );
+                htmlDoc.write( html );
                 htmlDoc.close();
                 
                 return $(htmlDoc);
             };
         }
         else {
+            function getInnerBody( html ) {
+                return html.replace(/(^[\s\S]*?<body[^>]*>|<\/body>(?![\s\S]*<\/body>)[\s\S]*$)/gi, '');
+            } // end of getInnerBody()
+            
             return function( html ) {
                 var page_body = $('<div/>').html( getInnerBody( html ) );
                 return page_body;
             };
         }
     }
-    var range=htmlDoc.createRange();
+    var range = htmlDoc.createRange();
     
     return function( html ) {
         html = html.replace(/(^[\s\S]*?<html[^>]*>|<\/html[^>]*>(?![\s\S]*<\/html[^>]*>)[\s\S]*$)/gi, '');
@@ -222,13 +235,13 @@ var getDocument = (function() {
 })(); // end of getDocument()
 
 
-function getStaticDocument( html ) {
-    var document = getDocument( html );
+function getSimpleDocument( html ) {
+    var htmlDoc = getDocument( html );
     
-    document.find('script,style,iframe,img,object,embed,video,audio').remove();
+    htmlDoc.find('script,style,iframe,img,object,embed,video,audio').remove();
     
-    return document;
-} // end of getStaticDocument()
+    return htmlDoc;
+} // end of getSimpleDocument()
 
 
 function trunc_text( text, keywords ) {
@@ -265,86 +278,30 @@ function trunc_text( text, keywords ) {
 } // end of trunc_text()
 
 
-function build_search_result_html( result_data, keywords, notice ) {
-    bs_cc_as_notice = notice;
-    bs_cc_as_search_keywords = keywords;
+var escape_html = (function(){
+    var escape_map = {
+            '&' : '&amp;'
+        ,   '<' : '&lt;'
+        ,   '>' : '&gt;'
+        ,   '"' : '&quot;'
+        ,   '`' : '&#x60;'
+        ,   "'" : '&#x27;'
+        },
+        chars = [];
     
-    var start_index = (bs_cc_as_current_page - 1) * ENTRY_PER_PAGE,
-        last_index = result_data.length,
-        page_navigation = $('<center><div style="margin: 5px;"/></center>'),
-        navi_container = page_navigation.find('div').first(),
-        work = $('<div/>');
-    
-    if ( 1 < bs_cc_as_current_page ) {
-        navi_container.append( $('<a href="javascript:change_page(' + (bs_cc_as_current_page - 1) + ')" style="margin-right: 4px">＜前へ</a>') );
-    }
-    for ( var ci=0; ci < (result_data.length / ENTRY_PER_PAGE); ci ++ ) {
-        var page_number = ci + 1;
-        if ( bs_cc_as_current_page == page_number ) {
-            navi_container.append( $('<span style="margin-right: 4px">' + page_number + '</span>') );
-        } 
-        else {
-            navi_container.append( $('<a href="javascript:change_page(' + page_number + ')"  style="margin-right: 4px">' + page_number + '</a>') );
+    for ( var char in escape_map ) {
+        if ( escape_map.hasOwnProperty( char ) ) {
+            chars.push( char );
         }
     }
-    if ( bs_cc_as_current_page < (result_data.length / ENTRY_PER_PAGE) ) {
-        navi_container.append( $('<a href="javascript:change_page(' + (bs_cc_as_current_page + 1) + ')" style="margin-right: 4px">次へ＞</a>') );
-    }
+    var reg_escape = new RegExp( '[' + chars.join('') + ']', 'g' );
     
-    var search_container = $('<div/>').html([
-            //'<div id="search_notice" style="text-align:left; font-size: x-small;">※スペースでAND検索が出来ます。<br />※この状態からの２度目の検索は非常に高速です。</div>'
-            '<form class="cocolog_ajax_search" onsubmit="cocologAjaxSearch( null, this.search_box.value ); return false">'
-        ,   '    <input type="search" name="search_box" value="" results="5" autosave="tangerine" placeholder="検索語を入力" />'
-        ,   '    <input type="submit" value="検索" />'
-        ,   '    <p style="font-size: x-small;">※スペースでAND検索が出来ます。</p>'
-        ,   '</form>'
-        ,   '<div class="entry-top"></div>'
-        ,   '<div class="entry">'
-        ,   '    <h3>' + notice +'</h3>'
-        ,   '    <div class="entry-body-top"></div>'
-        ,   '    <div class="entry-body">'
-        ,   '        <div class="entry-body-text">'
-        ,   '            <ol type="1" start="' + (start_index + 1) + '" style="text-align:left;">'
-        ,   '            </ol>'
-        ,   '        </div>'
-        ,   '    </div>'
-        ,   '    <div class="entry-body-bottom"></div>'
-        ,   '    <p class="posted" style="text-align:right; font-size: smaller;">'
-        ,   '         <span class="post-footers"></span>'
-        ,   '         <span class="separator"></span>'
-        ,   '         <span class="bo_so_copyright">powered by <a href="' + RELATED_URL + '">' + SCRIPT_NAME + '</a></span>'
-        ,   '         <a href="#" class="navi_to_top" style="margin-left:16px;">上に戻る▲</a>'
-        ,   '    </p>'
-        ,   '</div>'
-        ,   '<div class="entry-bottom"></div>'
-        ,   '<div class="date-footer"></div>'
-        ].join('\n')),
-        ol = search_container.find('ol').first();
-    
-    ol.before( page_navigation.clone( true ) );
-    ol.after( page_navigation.clone( true ) );
-    
-    if ( ( (bs_cc_as_current_page) * ENTRY_PER_PAGE ) < result_data.length ) {
-        last_index = bs_cc_as_current_page * ENTRY_PER_PAGE;
-    }
-    
-    for ( var ci= start_index; ci < last_index; ci ++ ) {
-        var entry = result_data[ci],
-            li = $([
-                '<li>'
-            ,   '  <a href="' + entry.link + '#search_word=' + encodeURIComponent(search_keyword) + '" target="_blank">'
-            ,   work.text( entry.title ).html()
-            ,   '  </a><br />'
-            ,   work.text( trunc_text( entry.body, keywords ) ).html()
-            ,   '</li>'
-            ].join(''));
-        
-        li.highlight( keywords );
-        
-        ol.append(li);
-    }
-    return search_container.html();
-} // end of build_search_result_html()
+    return function(html) {
+        return html.replace(reg_escape, function( match ) {
+            return escape_map[match];
+        });
+    };
+})();
 
 
 function scroll_to_node_top( node ) {
@@ -355,35 +312,144 @@ function scroll_to_node_top( node ) {
 } // end of scroll_to_node_top()
 
 
-function set_search_result_events( result_content ) {
-    if ( ! result_content ) {
+function build_search_result_container() {
+    result_content = getContentContainer();
+    if ( !result_content ) {
+        alert('このサイトには対応していません');
         return;
     }
-    result_content.find('a.navi_to_top').unbind('click').click(function() {
-        setTimeout(function() {
-            scroll_to_node_top( result_content );
-        }, 1);
+    result_content.addClass('search-result-container');
+    
+    var search_container = $('<div/>').html([
+            '<form class="cocolog_ajax_search">'
+        ,   '    <input type="search" name="search_box" value="" results="5" autosave="tangerine" placeholder="検索語を入力" />'
+        ,   '    <input type="submit" value="検索" />'
+        ,   '    <p style="font-size: x-small;">※スペースでAND検索が出来ます。</p>'
+        ,   '</form>'
+        ,   '<div class="entry-top"></div>'
+        ,   '<div class="entry search-result-container">'
+        ,   '    <h3 class="search-notice"></h3>'
+        ,   '    <div class="entry-body-top"></div>'
+        ,   '    <div class="entry-body">'
+        ,   '        <div class="entry-body-text">'
+        ,   '            <center><div class="page-navigation" style="margin: 5px;"></div></center>'
+        ,   '            <ol class="search-result" type="1" start="1" style="text-align:left;">'
+        ,   '            </ol>'
+        ,   '            <center><div class="page-navigation" style="margin: 5px;"></div></center>'
+        ,   '        </div>'
+        ,   '    </div>'
+        ,   '    <div class="entry-body-bottom"></div>'
+        ,   '    <p class="posted" style="text-align:right; font-size: smaller;">'
+        ,   '         <span class="post-footers"></span>'
+        ,   '         <span class="separator"></span>'
+        ,   '         <span class="bo_so_copyright">powered by <a href="' + RELATED_URL + '">' + SCRIPT_NAME + '</a></span>'
+        ,   '         <a href="#" class="to_top_navigation" style="margin-left:16px;">上に戻る▲</a>'
+        ,   '    </p>'
+        ,   '</div>'
+        ,   '<div class="entry-bottom"></div>'
+        ,   '<div class="date-footer"></div>'
+        ].join('\n'));
+    
+    search_container.find('a.to_top_navigation').click(function() {
+        scroll_to_node_top( result_content );
         return false;
     });
     
-    debug_log('page_counter: ' + page_counter + ' / ' + backnumber_url_list.length);
-    
-    var search_box = result_content.find('input[name=search_box]'),
-        form = search_box.parents('form').first();
+    var search_form = search_container.find('form.cocolog_ajax_search'),
+        search_box = search_form.find('input[name="search_box"]');
     
     search_box.val( getKeywords( search_keyword ).join(' ') );
     
-    if ( page_counter < backnumber_url_list.length ) {
-        //form.hide();
-        //form.css('visibility', 'hidden');
-        form.find('input').attr('disabled', 'disabled');
+    search_form.submit(function () {
+        cocologAjaxSearch( search_box.val() );
+        return false;
+    });
+    
+    result_content.empty().append( search_container.children() );
+    
+    search_box.select().focus();
+    
+} // end of build_search_result_container()
+
+
+function update_search_notice( search_notice ) {
+    if ( ! result_content ) {
         return;
     }
-    //form.show();
-    //form.css('visibility', 'visible');
-    form.find('input').removeAttr('disabled');
-    search_box.select().focus();
-} // end of set_search_result_events()
+    result_content.find('h3.search-notice').text( search_notice );
+} // end of update_search_notice()
+
+
+var build_search_result = (function() {
+    var get_navi_link = (function() {
+        var navi_link_template = $('<a href="#" style="margin-right: 4px" />');
+        
+        return function( page_number, navi_text ) {
+            return navi_link_template.clone( true ).text( navi_text ).click(function () {
+                setTimeout(function() {
+                    change_page( page_number );
+                }, 1);
+                return false;
+            })
+        };
+    })();
+    
+    return function( result_data, keywords, notice ) {
+        if ( ! result_content ) {
+            return;
+        }
+        bs_cc_as_notice = notice;
+        bs_cc_as_search_keywords = keywords;
+        
+        var search_container = result_content.find('div.search-result-container').first(),
+            search_result = search_container.find('ol.search-result').first(),
+            page_navigation = search_container.find('div.page-navigation'),
+            start_index = (bs_cc_as_current_page - 1) * ENTRY_PER_PAGE,
+            last_index = result_data.length;
+        
+        update_search_notice( notice );
+        page_navigation.empty();
+        search_result.empty();
+        
+        search_result.attr('start', start_index + 1);
+        
+        if ( 1 < bs_cc_as_current_page ) {
+            page_navigation.append( get_navi_link( bs_cc_as_current_page - 1, '＜前へ' ) );
+        }
+        for ( var ci=0; ci < (result_data.length / ENTRY_PER_PAGE); ci ++ ) {
+            var page_number = ci + 1;
+            if ( bs_cc_as_current_page == page_number ) {
+                page_navigation.append( $('<span style="margin-right: 4px">' + page_number + '</span>') );
+            } 
+            else {
+                page_navigation.append( get_navi_link( page_number, page_number ) );
+            }
+        }
+        if ( bs_cc_as_current_page < (result_data.length / ENTRY_PER_PAGE) ) {
+            page_navigation.append( get_navi_link( bs_cc_as_current_page + 1, '次へ＞' ) );
+        }
+        
+        if ( ( (bs_cc_as_current_page) * ENTRY_PER_PAGE ) < result_data.length ) {
+            last_index = bs_cc_as_current_page * ENTRY_PER_PAGE;
+        }
+        
+        for ( var ci= start_index; ci < last_index; ci ++ ) {
+            var entry = result_data[ci],
+                li = $([
+                    '<li>'
+                ,   '  <a href="' + entry.link + '#search_word=' + encodeURIComponent(search_keyword) + '" target="_blank">'
+                ,   escape_html( entry.title )
+                ,   '  </a><br />'
+                ,   escape_html( trunc_text( entry.body, keywords ) )
+                ,   '</li>'
+                ].join(''));
+            
+            li.highlight( keywords );
+            
+            search_result.append(li);
+        }
+    };
+})(); // end of build_search_result()
 
 
 function search() {
@@ -394,16 +460,15 @@ function search() {
         return;
     }
     
-    var result_html = '',
-        search_notice = '',
+    var search_notice = '',
         reg_keywords_list = [];
     
     $.each(keywords, function(index, keyword) {
-        reg_keywords_list.push( getRegKeywords( [keyword] ) );
+        reg_keywords_list.push( getRegKeywords( [ keyword ] ) );
     })
     
     for ( var ci = search_counter; ci < entries.length; ci ++ ) {
-        var entry = entries[ci],
+        var entry = entries[ ci ],
             is_match = true;
         
         $.each(reg_keywords_list, function(index, reg) {
@@ -425,99 +490,144 @@ function search() {
     
     if ( result_data.length == 0 ) {
         if ( backnumber_url_list.length <= page_counter ) {
-            //result_html =  '一致しませんでした';
             search_notice = '一致しませんでした';
-            result_html = build_search_result_html( result_data, keywords, search_notice );
             is_hit = true;
         } 
         else {
-            result_content.html( '検索中... ' + Math.floor( ( page_counter * 100 ) / backnumber_url_list.length )  + '%' );
-            return;
+            search_notice = '検索中... ' + Math.floor( ( page_counter * 100 ) / backnumber_url_list.length )  + '%';
         }
     }
     else {
         if ( backnumber_url_list.length <= page_counter ) {
             search_notice = '検索結果（' + result_data.length + '件ヒット）';
-            result_html = build_search_result_html( result_data, keywords, search_notice );
         }
         else {
             search_notice = '検索中...' + Math.floor( ( page_counter * 100 )  / backnumber_url_list.length ) + '%（' + result_data.length + '件ヒット）';
-            result_html = build_search_result_html( result_data, keywords, search_notice );
         }
     }
     if (is_hit) {
-        result_content.html( result_html );
+        build_search_result( result_data, keywords, search_notice );
     }
     else {
-        result_content.find('h3').first().html( search_notice );
+        update_search_notice( search_notice );
     }
-    set_search_result_events( result_content );
 } // end of search()
 
 
 function parse_enteries_page( responseText, backnumber_url ) {
-    var page_document = getStaticDocument( responseText ),
+    var page_document = getSimpleDocument( responseText ),
         page_container = getContentContainer( page_document );
     
-    if ( isOriginalTemplate() ) {
-        page_container.find('div.entry').each(function() {
-            var entry = $(this),
-                link = entry.find('a').first(),
-                body = entry.find('div.entry-body').first();
-            
-            entries.push({
-                title : trunc_spaces( link.text() )
-            ,   body : trunc_spaces( body.text() )
-            ,   link : link.attr('href')
+    if ( page_container ) {
+        if ( isOriginalTemplate() ) {
+            page_container.find('div.entry').each(function() {
+                var entry = $(this),
+                    link = entry.find('a').first(),
+                    body = entry.find('div.entry-body').first();
+                
+                entries.push({
+                    title : trunc_spaces( link.text() )
+                ,   body : trunc_spaces( body.text() )
+                ,   link : link.attr('href')
+                });
             });
-        });
-    }
-    else {
-        page_container.find('div.entry').each(function() {
-            var entry = $(this),
-                title = entry.find('h3').first(),
-                link = entry.find('a.permalink,h3 a').first(),
-                //body = entry.find('div.entry-body-text,div.entry-more');
-                body = entry.find('div.entry-body').first();
-            
-            entries.push({
-                title : trunc_spaces( title.text() )
-            ,   body : trunc_spaces( body.text() )
-            ,   link : link.attr('href')
+        }
+        else {
+            page_container.find('div.entry').each(function() {
+                var entry = $(this),
+                    title = entry.find('h3').first(),
+                    link = entry.find('a.permalink,h3 a').first(),
+                    //body = entry.find('div.entry-body-text,div.entry-more');
+                    body = entry.find('div.entry-body').first();
+                
+                entries.push({
+                    title : trunc_spaces( title.text() )
+                ,   body : trunc_spaces( body.text() )
+                ,   link : link.attr('href')
+                });
+                
+                if ( DEBUG && 1 < body.find('div.entry-body-text').size() ) {
+                    debug_log('※ HTML が壊れている可能性あり ' + backnumber_url);
+                    debug_log(entry);
+                    debug_log(title);
+                    debug_log(body);
+                    debug_log(link);
+                }
             });
-            
-            if ( DEBUG && 1 < body.find('div.entry-body-text').size() ) {
-                debug_log('※ HTML が壊れている可能性あり ' + backnumber_url);
-                debug_log(entry);
-                debug_log(title);
-                debug_log(body);
-                debug_log(link);
-            }
-        });
+        }
     }
     page_counter ++;
+    debug_log('page_counter: ' + page_counter + ' / ' + backnumber_url_list.length + ': ' + backnumber_url);
     
-    search();
-    
-    load_backnumber();
+    /*
+    //search();
+    //
+    //load_backnumber();
+    */
 } // end of parse_enteries_page()
 
 
-function load_backnumber() {
-    if ( backnumber_url_list.length <= page_counter ) {
-        search();
-        return;
-    } 
+var load_backnumber = (function() {
+    function load_request( backnumber_url ) {
+        debug_log('load backnumber: ' + backnumber_url);
+        
+        if ( loaded_backnumber[ backnumber_url ] ) {
+            debug_log('*** duplicate *** ' + backnumber_url); // ここにはこないはず
+            return;
+        }
+        backnumber_queue.push({
+            backnumber_url : backnumber_url
+        ,   responseText : undefined
+        });
+        loaded_backnumber[ backnumber_url ] = backnumber_queue[ backnumber_queue.length -1 ];
+        
+        $.ajax({
+            url: backnumber_url
+        ,   type: 'GET'
+        ,   data: {}
+        ,   dataType: 'html'
+        })
+        .done(function( data, textStatus, jqXHR ) {
+            loaded_backnumber[ backnumber_url ].responseText = data;
+        })
+        .fail(function( jqXHR, textStatus, errorThrown ) {
+            var error_text = backnumber_url + ' が読み込めませんでした (status: ' + textStatus + ')';
+            console.error(error_text);
+            debug_log(error_text);
+            loaded_backnumber[ backnumber_url ].responseText = '<html><body>' + error_text + '</body></html>';
+        })
+        .always(function( jqXHR, textStatus ) {
+            var parse_count = 0;
+            while ( ( 0 < backnumber_queue.length ) && ( backnumber_queue[0].responseText ) ) {
+                var backnumber_info = backnumber_queue.shift();
+                parse_enteries_page( backnumber_info.responseText, backnumber_info.backnumber_url );
+                loaded_backnumber[ backnumber_info.backnumber_url ].responseText = null;
+                parse_count ++;
+            }
+            if ( 0 < parse_count ) {
+                search();
+            }
+            if ( backnumber_queue.length == 0 ) {
+                load_backnumber();
+            }
+        });
+        request_page_counter ++;
+    }
     
-    var backnumber_url = backnumber_url_list[ page_counter ];
-    $.get(backnumber_url, function( responseText ) {
-        parse_enteries_page( responseText, backnumber_url );
-    }, 'html');
-} // end of load_backnumber()
+    return function() {
+        if ( backnumber_url_list.length <= page_counter ) {
+            search();
+            return;
+        } 
+        for ( var ci = request_page_counter, limit = Math.min( backnumber_url_list.length, request_page_counter + MAX_CONCURRENT_LOAD ); ci < limit; ci++ ) {
+            load_request( backnumber_url_list[ ci ] );
+        }
+    };
+})(); // end of load_backnumber()
 
 
 function parse_backnumbers( responseText, archive_file_path ) {
-    var page_document = getStaticDocument( responseText ),
+    var page_document = getSimpleDocument( responseText ),
         page_container = getContentContainer( page_document ),
         link_selector;
     
@@ -544,10 +654,29 @@ function load_archive_file( archive_file_path ) {
     
     last_archive_file_path = archive_file_path;
     
+    page_counter = 0;
+    request_page_counter = 0;
     backnumber_url_list = [];
-    $.get(archive_file_path, function( responseText ) {
-        parse_backnumbers( responseText, archive_file_path );
-    }, 'html');
+    entries = [];
+    loaded_backnumber = {};
+    backnumber_queue = [];
+    
+    debug_log('load archive: ' + archive_file_path);
+    
+    $.ajax({
+        url: archive_file_path
+    ,   type: 'GET'
+    ,   data: {}
+    ,   dataType: 'html'
+    })
+    .done(function( data, textStatus, jqXHR ) {
+        parse_backnumbers( data, archive_file_path );
+    })
+    .fail(function( jqXHR, textStatus, errorThrown ) {
+        last_archive_file_path = null;
+        alert(archive_file_path + ' が読み込めませんでした');
+    });
+    
 } // end of load_archive_file()
 
 
@@ -559,43 +688,45 @@ function lookahead_backnumbers() {
     search_keyword = '';
     search_counter = 0;
     
-    result_content = getContentContainer();
-    
     var archive_file_path = getArchiveFilePath();
     
     load_archive_file( archive_file_path );
 } // end of lookahead_backnumbers()
 
 
-function cocologAjaxSearch( archive_file_path, text ) {
+function cocologAjaxSearch() {
+    var archive_file_path = getArchiveFilePath(),
+        text = '';
+    
+    if ( arguments.length < 2 ) {
+        text = arguments[0];
+    }
+    else {
+        //archive_file_path = arguments[1];
+        //※ オリジナルの cocologAjaxSearch() は当初、第1引数に archive_file_path を明示していたが、その後自動的に取得するようになったため、第1引数は無視されるようになった。
+        text = arguments[1];
+    }
+    
     search_keyword = text;
     search_counter = 0;
     bs_cc_as_current_page = 1;
     result_data = [];
     matched_url = {};
     
-    result_content = getContentContainer();
+    build_search_result_container();
     
-    //window.scroll(0,0);
     scroll_to_node_top( result_content );
     
-    if ( ! archive_file_path ) {
-        archive_file_path = getArchiveFilePath();
-    }
     load_archive_file( archive_file_path );
-    
-    return false;
 } // end of cocologAjaxSearch()
 
 
 function change_page( new_page ) {
-    //window.scroll(0,0);
     scroll_to_node_top( result_content );
     
     bs_cc_as_current_page = new_page;
     
-    result_content.html( build_search_result_html( result_data, bs_cc_as_search_keywords, bs_cc_as_notice ) );
-    set_search_result_events( result_content );
+    build_search_result( result_data, bs_cc_as_search_keywords, bs_cc_as_notice );
 } // end of change_page()
 
 
@@ -628,17 +759,32 @@ function set_cocolog_ajax_search_options( options ) {
     if ( ! options ) {
         options = {}
     }
-    if ( options.debug ) {
+    if ( typeof options.debug != 'undefined' ) {
         DEBUG = options.debug;
     }
     if ( options.color ) {
-        HIGHLIGHT_COLOR = options.color;
+        if ( $('<p/>').css('color', options.color).css('color') ) {
+            HIGHLIGHT_COLOR = options.color;
+            set_highlight_color();
+        }
     }
     if ( options.truncation_length ) {
-        TRUNCATION_LENGTH = options.truncation_length;
+        var number = parseInt( options.truncation_length, 10 );
+        if ( ( ! isNaN( number ) ) && ( 0 < number ) ) {
+            TRUNCATION_LENGTH = number;
+        }
     }
     if ( options.entry_per_page ) {
-        ENTRY_PER_PAGE = options.entry_per_page;
+        var number = parseInt( options.entry_per_page, 10 );
+        if ( ( ! isNaN( number ) ) && ( 0 < number ) ) {
+            ENTRY_PER_PAGE = number;
+        }
+    }
+    if ( options.max_concurrent_load ) {
+        var number = parseInt( options.max_concurrent_load, 10 );
+        if ( ( ! isNaN( number ) ) && ( 0 < number ) ) {
+            MAX_CONCURRENT_LOAD = number;
+        }
     }
     if ( options.search_box_id ) {
         SEARCH_BOX_ID = options.search_box_id;
@@ -700,10 +846,9 @@ function set_credit( credit ) {
 
 //{ ■ 外部提供用(グローバル)関数
 window.cocologAjaxSearch = cocologAjaxSearch;
-window.change_page = change_page;
-window.show_all_backnumbers = show_all_backnumbers;
-window.set_highlight_color = set_highlight_color;
+window.show_all_backnumbers = show_all_backnumbers; // テスト用
 window.set_cocolog_ajax_search_options = set_cocolog_ajax_search_options;
+window.set_highlight_color = set_highlight_color;
 //}
 
 
