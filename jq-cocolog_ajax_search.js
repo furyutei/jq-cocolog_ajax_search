@@ -53,23 +53,22 @@ var DEBUG = false,
 
 
 //{ ■ 共通変数
-var page_counter = 0,
-    backnumber_url_list = [],
-    entries = [],
-    request_page_counter = 0,
-    loaded_backnumber = {},
-    backnumber_queue = [],
-    matched_url = {},
-    search_keyword = '',
+var is_lookahead = true,
     result_content = null,
-    search_counter = 0,
-    result_data = [],
-    is_lookahead = true,
     last_archive_file_path = null,
-    
-    bs_cc_as_current_page = 1,
-    bs_cc_as_notice = '',
-    bs_cc_as_search_keywords = [];
+    requested_backnumber_counter = 0,
+    loaded_backnumber_counter = 0,
+    backnumber_url_list = [],
+    backnumber_queue = [],
+    backnumber_map = {},
+    entries = [],
+    search_keyword = '',
+    search_counter = 0,
+    matched_entry_map = {},
+    result_data = [],
+    current_page = 1,
+    current_notice = '',
+    current_search_keywords = [];
 //}
 
 
@@ -98,29 +97,29 @@ function trunc_spaces( string ) {
 } // end of trunc_spaces()
 
 
-function getAbsolutePath( url ) {
+function get_absolute_path( url ) {
     return trunc_spaces( url ).replace(/^https?:\/\/[^\/]+/i, '');
-} // end of getAbsolutePath()
+} // end of get_absolute_path()
 
 
-function getArchiveFilePath() {
+function get_archive_file_path() {
     var archives_url = ( $('h1 a').first().attr('href') || '' ) + 'archives.html';
-    return getAbsolutePath( archives_url );
-} // end of getArchiveFilePath()
+    return get_absolute_path( archives_url );
+} // end of get_archive_file_path()
 
 
-function isOriginalTemplate() {
+function is_original_template() {
     return / layout/.test( ' ' + ( $('body').first().attr('class') || '' ) + ' ' );
-} // end of isOriginalTemplate()
+} // end of is_original_template()
 
 
-function getContentContainer( root ) {
+function get_content_container( root ) {
     if ( ! root ) {
         root = $('body');
     }
     var content;
     
-    if ( isOriginalTemplate() ) {
+    if ( is_original_template() ) {
         //content = root.find('#beta-inner');
         content = root.find('div.entry').first().parent();
     }
@@ -132,10 +131,10 @@ function getContentContainer( root ) {
         content = null;
     }
     return content;
-} // end of getContentContainer()
+} // end of get_content_container()
 
 
-function getArgs( query ) {
+function get_args( query ) {
     var args = {},
         params= query.split('&');
     
@@ -149,10 +148,10 @@ function getArgs( query ) {
         args[name] = value;
     });
     return args;
-} // end of getArgs()
+} // end of get_args()
 
 
-function getKeywords( search_query ) {
+function get_keywords( search_query ) {
     if ( Object.prototype.toString.call( search_query ) != '[object String]' ) {
         search_query = '';
     }
@@ -167,10 +166,10 @@ function getKeywords( search_query ) {
         }
     });
     return keywords;
-} // end of getKeywords()
+} // end of get_keywords()
 
 
-function getRegKeywords( keywords ) {
+function get_reg_keywords( keywords ) {
     var modified_keywords = [];
     
     $.each(keywords, function( index, keyword ) {
@@ -179,12 +178,12 @@ function getRegKeywords( keywords ) {
     });
     
     return new RegExp( '(' + modified_keywords.join('|') + ')', 'gi' );
-} // end of getRegKeywords()
+} // end of get_reg_keywords()
 
 
-var getDocument = (function() {
+var get_document = (function() {
     if ( ( document.implementation ) && ( document.implementation.createHTMLDocument ) ) {
-        var htmlDoc = document.implementation.createHTMLDocument('');
+        var html_doc = document.implementation.createHTMLDocument('');
     }
     else if ( typeof XSLTProcessor != 'undefined' ) {
         var proc = new XSLTProcessor(),
@@ -197,18 +196,18 @@ var getDocument = (function() {
             ,   '</xsl:stylesheet>'
             ].join(''), 'application/xml');
         proc.importStylesheet(xsltStyleSheet);
-        var htmlDoc = proc.transformToDocument( xsltStyleSheet );
+        var html_doc = proc.transformToDocument( xsltStyleSheet );
     }
     else {
         if ( typeof ActiveXObject != 'undefined' ) {
             return function( html ) {
-                var htmlDoc = new ActiveXObject( 'htmlfile' );
-                htmlDoc.designMode = 'on';
-                htmlDoc.open( 'text/html' );
-                htmlDoc.write( html );
-                htmlDoc.close();
+                var html_doc = new ActiveXObject( 'htmlfile' );
+                html_doc.designMode = 'on';
+                html_doc.open( 'text/html' );
+                html_doc.write( html );
+                html_doc.close();
                 
-                return $(htmlDoc);
+                return $(html_doc);
             };
         }
         else {
@@ -222,31 +221,31 @@ var getDocument = (function() {
             };
         }
     }
-    var range = htmlDoc.createRange();
+    var range = html_doc.createRange();
     
     return function( html ) {
         html = html.replace(/(^[\s\S]*?<html[^>]*>|<\/html[^>]*>(?![\s\S]*<\/html[^>]*>)[\s\S]*$)/gi, '');
-        range.selectNodeContents( htmlDoc.documentElement );
+        range.selectNodeContents( html_doc.documentElement );
         range.deleteContents();
-        htmlDoc.documentElement.appendChild( range.createContextualFragment( html ) );
+        html_doc.documentElement.appendChild( range.createContextualFragment( html ) );
         
-        return $(htmlDoc);
+        return $(html_doc);
     };
-})(); // end of getDocument()
+})(); // end of get_document()
 
 
-function getSimpleDocument( html ) {
-    var htmlDoc = getDocument( html );
+function get_simple_document( html ) {
+    var html_doc = get_document( html );
     
-    htmlDoc.find('script,style,iframe,img,object,embed,video,audio').remove();
+    html_doc.find('script,style,iframe,img,object,embed,video,audio').remove();
     
-    return htmlDoc;
-} // end of getSimpleDocument()
+    return html_doc;
+} // end of get_simple_document()
 
 
 function trunc_text( text, keywords ) {
     var text_length = text.length,
-        reg_keywords = getRegKeywords( keywords ),
+        reg_keywords = get_reg_keywords( keywords ),
         response = reg_keywords.exec( text );
 
     if ( response ) {
@@ -301,7 +300,7 @@ var escape_html = (function(){
             return escape_map[match];
         });
     };
-})();
+})(); // end of escape_html()
 
 
 function scroll_to_node_top( node ) {
@@ -313,7 +312,7 @@ function scroll_to_node_top( node ) {
 
 
 function build_search_result_container() {
-    result_content = getContentContainer();
+    result_content = get_content_container();
     if ( !result_content ) {
         alert('このサイトには対応していません');
         return;
@@ -358,7 +357,7 @@ function build_search_result_container() {
     var search_form = search_container.find('form.cocolog_ajax_search'),
         search_box = search_form.find('input[name="search_box"]');
     
-    search_box.val( getKeywords( search_keyword ).join(' ') );
+    search_box.val( get_keywords( search_keyword ).join(' ') );
     
     search_form.submit(function () {
         cocologAjaxSearch( search_box.val() );
@@ -398,13 +397,13 @@ var build_search_result = (function() {
         if ( ! result_content ) {
             return;
         }
-        bs_cc_as_notice = notice;
-        bs_cc_as_search_keywords = keywords;
+        current_notice = notice;
+        current_search_keywords = keywords;
         
         var search_container = result_content.find('div.search-result-container').first(),
             search_result = search_container.find('ol.search-result').first(),
             page_navigation = search_container.find('div.page-navigation'),
-            start_index = (bs_cc_as_current_page - 1) * ENTRY_PER_PAGE,
+            start_index = (current_page - 1) * ENTRY_PER_PAGE,
             last_index = result_data.length;
         
         update_search_notice( notice );
@@ -413,24 +412,24 @@ var build_search_result = (function() {
         
         search_result.attr('start', start_index + 1);
         
-        if ( 1 < bs_cc_as_current_page ) {
-            page_navigation.append( get_navi_link( bs_cc_as_current_page - 1, '＜前へ' ) );
+        if ( 1 < current_page ) {
+            page_navigation.append( get_navi_link( current_page - 1, '＜前へ' ) );
         }
         for ( var ci=0; ci < (result_data.length / ENTRY_PER_PAGE); ci ++ ) {
             var page_number = ci + 1;
-            if ( bs_cc_as_current_page == page_number ) {
+            if ( current_page == page_number ) {
                 page_navigation.append( $('<span style="margin-right: 4px">' + page_number + '</span>') );
             } 
             else {
                 page_navigation.append( get_navi_link( page_number, page_number ) );
             }
         }
-        if ( bs_cc_as_current_page < (result_data.length / ENTRY_PER_PAGE) ) {
-            page_navigation.append( get_navi_link( bs_cc_as_current_page + 1, '次へ＞' ) );
+        if ( current_page < (result_data.length / ENTRY_PER_PAGE) ) {
+            page_navigation.append( get_navi_link( current_page + 1, '次へ＞' ) );
         }
         
-        if ( ( (bs_cc_as_current_page) * ENTRY_PER_PAGE ) < result_data.length ) {
-            last_index = bs_cc_as_current_page * ENTRY_PER_PAGE;
+        if ( ( (current_page) * ENTRY_PER_PAGE ) < result_data.length ) {
+            last_index = current_page * ENTRY_PER_PAGE;
         }
         
         for ( var ci= start_index; ci < last_index; ci ++ ) {
@@ -454,7 +453,7 @@ var build_search_result = (function() {
 
 function search() {
     var is_hit = false,
-        keywords = getKeywords( search_keyword );
+        keywords = get_keywords( search_keyword );
     
     if ( keywords.length < 1 ) {
         return;
@@ -464,7 +463,7 @@ function search() {
         reg_keywords_list = [];
     
     $.each(keywords, function(index, keyword) {
-        reg_keywords_list.push( getRegKeywords( [ keyword ] ) );
+        reg_keywords_list.push( get_reg_keywords( [ keyword ] ) );
     })
     
     for ( var ci = search_counter; ci < entries.length; ci ++ ) {
@@ -479,8 +478,8 @@ function search() {
         });
         
         if ( is_match ) {
-            if ( ! matched_url[ entry.link ] ) {
-                matched_url[ entry.link ] = true;
+            if ( ! matched_entry_map[ entry.link ] ) {
+                matched_entry_map[ entry.link ] = true;
                 result_data.push( entry );
                 is_hit = true;
             }
@@ -489,20 +488,20 @@ function search() {
     }
     
     if ( result_data.length == 0 ) {
-        if ( backnumber_url_list.length <= page_counter ) {
+        if ( backnumber_url_list.length <= loaded_backnumber_counter ) {
             search_notice = '一致しませんでした';
             is_hit = true;
         } 
         else {
-            search_notice = '検索中... ' + Math.floor( ( page_counter * 100 ) / backnumber_url_list.length )  + '%';
+            search_notice = '検索中... ' + Math.floor( ( loaded_backnumber_counter * 100 ) / backnumber_url_list.length )  + '%';
         }
     }
     else {
-        if ( backnumber_url_list.length <= page_counter ) {
+        if ( backnumber_url_list.length <= loaded_backnumber_counter ) {
             search_notice = '検索結果（' + result_data.length + '件ヒット）';
         }
         else {
-            search_notice = '検索中...' + Math.floor( ( page_counter * 100 )  / backnumber_url_list.length ) + '%（' + result_data.length + '件ヒット）';
+            search_notice = '検索中...' + Math.floor( ( loaded_backnumber_counter * 100 )  / backnumber_url_list.length ) + '%（' + result_data.length + '件ヒット）';
         }
     }
     if (is_hit) {
@@ -514,12 +513,12 @@ function search() {
 } // end of search()
 
 
-function parse_enteries_page( responseText, backnumber_url ) {
-    var page_document = getSimpleDocument( responseText ),
-        page_container = getContentContainer( page_document );
+function parse_backnumber( backnumber_html, backnumber_url ) {
+    var page_document = get_simple_document( backnumber_html ),
+        page_container = get_content_container( page_document );
     
     if ( page_container ) {
-        if ( isOriginalTemplate() ) {
+        if ( is_original_template() ) {
             page_container.find('div.entry').each(function() {
                 var entry = $(this),
                     link = entry.find('a').first(),
@@ -556,30 +555,24 @@ function parse_enteries_page( responseText, backnumber_url ) {
             });
         }
     }
-    page_counter ++;
-    debug_log('page_counter: ' + page_counter + ' / ' + backnumber_url_list.length + ': ' + backnumber_url);
-    
-    /*
-    //search();
-    //
-    //load_backnumber();
-    */
-} // end of parse_enteries_page()
+    loaded_backnumber_counter ++;
+    debug_log('loaded_backnumber_counter: ' + loaded_backnumber_counter + ' / ' + backnumber_url_list.length + ': ' + backnumber_url);
+} // end of parse_backnumber()
 
 
 var load_backnumber = (function() {
     function load_request( backnumber_url ) {
         debug_log('load backnumber: ' + backnumber_url);
         
-        if ( loaded_backnumber[ backnumber_url ] ) {
+        if ( backnumber_map[ backnumber_url ] ) {
             debug_log('*** duplicate *** ' + backnumber_url); // ここにはこないはず
             return;
         }
         backnumber_queue.push({
             backnumber_url : backnumber_url
-        ,   responseText : undefined
+        ,   backnumber_html : undefined
         });
-        loaded_backnumber[ backnumber_url ] = backnumber_queue[ backnumber_queue.length -1 ];
+        backnumber_map[ backnumber_url ] = backnumber_queue[ backnumber_queue.length - 1 ];
         
         $.ajax({
             url: backnumber_url
@@ -588,20 +581,20 @@ var load_backnumber = (function() {
         ,   dataType: 'html'
         })
         .done(function( data, textStatus, jqXHR ) {
-            loaded_backnumber[ backnumber_url ].responseText = data;
+            backnumber_map[ backnumber_url ].backnumber_html = data;
         })
         .fail(function( jqXHR, textStatus, errorThrown ) {
             var error_text = backnumber_url + ' が読み込めませんでした (status: ' + textStatus + ')';
             console.error(error_text);
             debug_log(error_text);
-            loaded_backnumber[ backnumber_url ].responseText = '<html><body>' + error_text + '</body></html>';
+            backnumber_map[ backnumber_url ].backnumber_html = '<html><body>' + error_text + '</body></html>';
         })
         .always(function( jqXHR, textStatus ) {
             var parse_count = 0;
-            while ( ( 0 < backnumber_queue.length ) && ( backnumber_queue[0].responseText ) ) {
+            while ( ( 0 < backnumber_queue.length ) && ( backnumber_queue[0].backnumber_html ) ) {
                 var backnumber_info = backnumber_queue.shift();
-                parse_enteries_page( backnumber_info.responseText, backnumber_info.backnumber_url );
-                loaded_backnumber[ backnumber_info.backnumber_url ].responseText = null;
+                parse_backnumber( backnumber_info.backnumber_html, backnumber_info.backnumber_url );
+                backnumber_info.backnumber_html = null;
                 parse_count ++;
             }
             if ( 0 < parse_count ) {
@@ -611,27 +604,27 @@ var load_backnumber = (function() {
                 load_backnumber();
             }
         });
-        request_page_counter ++;
+        requested_backnumber_counter ++;
     }
     
     return function() {
-        if ( backnumber_url_list.length <= page_counter ) {
+        if ( backnumber_url_list.length <= loaded_backnumber_counter ) {
             search();
             return;
         } 
-        for ( var ci = request_page_counter, limit = Math.min( backnumber_url_list.length, request_page_counter + MAX_CONCURRENT_LOAD ); ci < limit; ci++ ) {
+        for ( var ci = requested_backnumber_counter, limit = Math.min( backnumber_url_list.length, requested_backnumber_counter + MAX_CONCURRENT_LOAD ); ci < limit; ci++ ) {
             load_request( backnumber_url_list[ ci ] );
         }
     };
 })(); // end of load_backnumber()
 
 
-function parse_backnumbers( responseText, archive_file_path ) {
-    var page_document = getSimpleDocument( responseText ),
-        page_container = getContentContainer( page_document ),
+function parse_archive( archive_html, archive_file_path ) {
+    var page_document = get_simple_document( archive_html ),
+        page_container = get_content_container( page_document ),
         link_selector;
     
-    if ( isOriginalTemplate() ) {
+    if ( is_original_template() ) {
         link_selector = 'div.archive.archive-date-based a';
     }
     else {
@@ -643,7 +636,7 @@ function parse_backnumbers( responseText, archive_file_path ) {
     });
     
     load_backnumber();
-} // end of parse_backnumbers()
+} // end of parse_archive()
 
 
 function load_archive_file( archive_file_path ) {
@@ -654,11 +647,11 @@ function load_archive_file( archive_file_path ) {
     
     last_archive_file_path = archive_file_path;
     
-    page_counter = 0;
-    request_page_counter = 0;
+    requested_backnumber_counter = 0;
+    loaded_backnumber_counter = 0;
     backnumber_url_list = [];
     entries = [];
-    loaded_backnumber = {};
+    backnumber_map = {};
     backnumber_queue = [];
     
     debug_log('load archive: ' + archive_file_path);
@@ -670,7 +663,7 @@ function load_archive_file( archive_file_path ) {
     ,   dataType: 'html'
     })
     .done(function( data, textStatus, jqXHR ) {
-        parse_backnumbers( data, archive_file_path );
+        parse_archive( data, archive_file_path );
     })
     .fail(function( jqXHR, textStatus, errorThrown ) {
         last_archive_file_path = null;
@@ -688,14 +681,14 @@ function lookahead_backnumbers() {
     search_keyword = '';
     search_counter = 0;
     
-    var archive_file_path = getArchiveFilePath();
+    var archive_file_path = get_archive_file_path();
     
     load_archive_file( archive_file_path );
 } // end of lookahead_backnumbers()
 
 
 function cocologAjaxSearch() {
-    var archive_file_path = getArchiveFilePath(),
+    var archive_file_path = get_archive_file_path(),
         text = '';
     
     if ( arguments.length < 2 ) {
@@ -709,9 +702,9 @@ function cocologAjaxSearch() {
     
     search_keyword = text;
     search_counter = 0;
-    bs_cc_as_current_page = 1;
+    current_page = 1;
     result_data = [];
-    matched_url = {};
+    matched_entry_map = {};
     
     build_search_result_container();
     
@@ -724,14 +717,14 @@ function cocologAjaxSearch() {
 function change_page( new_page ) {
     scroll_to_node_top( result_content );
     
-    bs_cc_as_current_page = new_page;
+    current_page = new_page;
     
-    build_search_result( result_data, bs_cc_as_search_keywords, bs_cc_as_notice );
+    build_search_result( result_data, current_search_keywords, current_notice );
 } // end of change_page()
 
 
 function show_all_backnumbers() {
-    var content = getContentContainer(),
+    var content = get_content_container(),
         ol = $('<ol type="1" start="1" style="text-align:left;"/>');
     
     $.each(entries, function( index, entry ) {
@@ -796,13 +789,13 @@ function set_cocolog_ajax_search_options( options ) {
 
 
 function ligting_search_keyword() {
-    var content = getContentContainer();
+    var content = get_content_container();
     if ( ! content ) {
         return;
     }
     var query = window.location.href.replace(/.*?#/, ''),
-        args = getArgs( query ),
-        keywords = getKeywords( args.search_word );
+        args = get_args( query ),
+        keywords = get_keywords( args.search_word );
     
     if ( keywords.length < 1 ) {
         return;
@@ -824,7 +817,6 @@ function set_lookahead_action( search_box ) {
     search_box.focus(function() {
         lookahead_backnumbers();
     });
-    
 } // end of set_lookahead_action()
 
 
@@ -838,7 +830,6 @@ function set_credit( credit ) {
         return;
     }
     credit.empty().append( $('<a/>').attr( 'href', RELATED_URL ).text( SCRIPT_NAME ) );
-    
 } // end of set_credit()
 
 //}
@@ -853,15 +844,13 @@ window.set_highlight_color = set_highlight_color;
 
 
 //{ ■ エントリポイント
-function main() {
+(function () {
     set_cocolog_ajax_search_options( window.cocolog_ajax_search_options );
     set_highlight_color();
     ligting_search_keyword();
     set_lookahead_action();
     set_credit();
-}
-
-main();
+})();
 //}
 
 
