@@ -47,8 +47,38 @@ var DEBUG = false,
     TRUNCATION_LENGTH = 80,
     ENTRY_PER_PAGE = 20,
     MAX_CONCURRENT_LOAD = 3,
+    DISPLAY_SEARCH_FORM = true,
     SEARCH_BOX_ID = 'search_box',
-    SEARCH_CREDIT_ID = 'search_credit';
+    SEARCH_CREDIT_ID = 'search_credit',
+    SEARCH_CONTAINER_TEMPLATE = [
+        '<form class="cocolog_ajax_search">'
+    ,   '    <input type="search" name="search_box" value="" results="5" autosave="tangerine" placeholder="検索語を入力" />'
+    ,   '    <input type="submit" value="検索" />'
+    ,   '    <p style="font-size: x-small;">※スペースでAND検索が出来ます。</p>'
+    ,   '</form>'
+    ,   '<div class="entry-top"></div>'
+    ,   '<div class="entry search-result-container">'
+    ,   '    <h3 class="search-notice">検索準備中...</h3>'
+    ,   '    <div class="entry-body-top"></div>'
+    ,   '    <div class="entry-body">'
+    ,   '        <div class="entry-body-text">'
+    ,   '            <center><div class="page-navigation" style="margin: 5px;"></div></center>'
+    ,   '            <ol class="search-result" type="1" start="1" style="text-align:left;">'
+    ,   '            </ol>'
+    ,   '            <center><div class="page-navigation" style="margin: 5px;"></div></center>'
+    ,   '        </div>'
+    ,   '    </div>'
+    ,   '    <div class="entry-body-bottom"></div>'
+    ,   '    <p class="posted" style="text-align:right; font-size: smaller;">'
+    ,   '         <span class="post-footers"></span>'
+    ,   '         <span class="separator"></span>'
+    ,   '         <span class="copyright">powered by <a href=""></a></span>'
+    ,   '         <a href="#" class="to_top_navigation" style="margin-left:16px;">上に戻る▲</a>'
+    ,   '    </p>'
+    ,   '</div>'
+    ,   '<div class="entry-bottom"></div>'
+    ,   '<div class="date-footer"></div>'
+    ].join('\n');
 //}
 
 
@@ -119,8 +149,7 @@ function get_content_container( root ) {
     var content;
     
     if ( is_original_template() ) {
-        //content = root.find('#beta-inner');
-        content = root.find('div.entry').first().parent();
+        content = root.find('#alpha-inner:has(div.entry),#beta-inner:has(div.entry),#gamma-inner:has(div.entry)').first();
     }
     else {
         content = root.find('#center div.content').first();
@@ -318,43 +347,16 @@ function build_search_result_container() {
     }
     result_content.addClass('search-result-container');
     
-    var search_container = $('<div/>').html([
-            '<form class="cocolog_ajax_search">'
-        ,   '    <input type="search" name="search_box" value="" results="5" autosave="tangerine" placeholder="検索語を入力" />'
-        ,   '    <input type="submit" value="検索" />'
-        ,   '    <p style="font-size: x-small;">※スペースでAND検索が出来ます。</p>'
-        ,   '</form>'
-        ,   '<div class="entry-top"></div>'
-        ,   '<div class="entry search-result-container">'
-        ,   '    <h3 class="search-notice"></h3>'
-        ,   '    <div class="entry-body-top"></div>'
-        ,   '    <div class="entry-body">'
-        ,   '        <div class="entry-body-text">'
-        ,   '            <center><div class="page-navigation" style="margin: 5px;"></div></center>'
-        ,   '            <ol class="search-result" type="1" start="1" style="text-align:left;">'
-        ,   '            </ol>'
-        ,   '            <center><div class="page-navigation" style="margin: 5px;"></div></center>'
-        ,   '        </div>'
-        ,   '    </div>'
-        ,   '    <div class="entry-body-bottom"></div>'
-        ,   '    <p class="posted" style="text-align:right; font-size: smaller;">'
-        ,   '         <span class="post-footers"></span>'
-        ,   '         <span class="separator"></span>'
-        ,   '         <span class="bo_so_copyright">powered by <a href="' + RELATED_URL + '">' + SCRIPT_NAME + '</a></span>'
-        ,   '         <a href="#" class="to_top_navigation" style="margin-left:16px;">上に戻る▲</a>'
-        ,   '    </p>'
-        ,   '</div>'
-        ,   '<div class="entry-bottom"></div>'
-        ,   '<div class="date-footer"></div>'
-        ].join('\n'));
+    var search_container = $('<div/>').html( SEARCH_CONTAINER_TEMPLATE ),
+        search_form = search_container.find('form.cocolog_ajax_search'),
+        search_box = search_form.find('input[name="search_box"]');
+    
+    search_container.find('span.copyright a').attr('href', RELATED_URL).text( SCRIPT_NAME );
     
     search_container.find('a.to_top_navigation').click(function() {
         scroll_to_node_top( result_content );
         return false;
     });
-    
-    var search_form = search_container.find('form.cocolog_ajax_search'),
-        search_box = search_form.find('input[name="search_box"]');
     
     search_box.val( search_keywords.join(' ') );
     
@@ -363,10 +365,17 @@ function build_search_result_container() {
         return false;
     });
     
-    result_content.empty().append( search_container.children() );
+    if ( DISPLAY_SEARCH_FORM ) {
+        search_form.show();
+    }
+    else {
+        search_form.hide();
+    }
+    result_content.empty().append( search_container.contents() );
     
-    search_box.select().focus();
-    
+    if ( DISPLAY_SEARCH_FORM ) {
+        search_box.select().focus();
+    }
 } // end of build_search_result_container()
 
 
@@ -380,7 +389,7 @@ function update_search_notice( search_notice ) {
 
 var build_search_result = (function() {
     var get_navi_link = (function() {
-        var navi_link_template = $('<a href="#" style="margin-right: 4px" />');
+        var navi_link_template = $('<a href="#" />');
         
         return function( page_number, navi_text ) {
             return navi_link_template.clone( true ).text( navi_text ).click(function () {
@@ -388,7 +397,15 @@ var build_search_result = (function() {
                     change_page( page_number );
                 }, 1);
                 return false;
-            })
+            });
+        };
+    })();
+    
+    var get_space = (function() {
+        var space_template = $('<div/>').text(' ').contents();
+        
+        return function() {
+            return space_template.clone( true );
         };
     })();
     
@@ -399,33 +416,48 @@ var build_search_result = (function() {
         current_notice = notice;
         
         var search_container = result_content.find('div.search-result-container').first(),
-            search_result = search_container.find('ol.search-result').first(),
-            page_navigation = search_container.find('div.page-navigation'),
+            old_page_navigations = search_container.find('div.page-navigation').empty(),
+            page_navigation = old_page_navigations.first().clone( true ),
+            old_search_result = search_container.find('ol.search-result').first().empty(),
+            search_result = old_search_result.clone( true ),
             start_index = (current_page - 1) * ENTRY_PER_PAGE,
             last_index = result_data.length,
             encoded_keyword_string = encodeURIComponent( search_keywords.join(' ') );
+        /*
+        // 【覚書】
+        //   DOMツリー上に存在したままノード（page_navigation等）の中身を更新した場合、異常に時間がかかるケースがあった。
+        //   ※特に、テキストノードの操作は酷く時間がかかる模様。
+        //   このため、複製した（DOMツリーからは切り離された状態の）ノードを更新した上で、元のノードと入れ替えている。
+        */
         
         update_search_notice( notice );
-        page_navigation.empty();
-        search_result.empty();
-        
-        search_result.attr('start', start_index + 1);
         
         if ( 1 < current_page ) {
             page_navigation.append( get_navi_link( current_page - 1, '＜前へ' ) );
+            page_navigation.append( get_space() );
         }
+        
         for ( var ci=0; ci < (result_data.length / ENTRY_PER_PAGE); ci ++ ) {
             var page_number = ci + 1;
             if ( current_page == page_number ) {
-                page_navigation.append( $('<span style="margin-right: 4px">' + page_number + '</span>') );
+                page_navigation.append( $('<span>' + page_number + '</span>') );
             } 
             else {
                 page_navigation.append( get_navi_link( page_number, page_number ) );
             }
+            //page_navigation.append( $('<span class="spacer" />').text(' ') );
+            page_navigation.append( get_space() ); // DOMツリー上にある場合には、テキストノードの挿入は異常に時間がかかるので注意
         }
+        
         if ( current_page < (result_data.length / ENTRY_PER_PAGE) ) {
             page_navigation.append( get_navi_link( current_page + 1, '次へ＞' ) );
         }
+        
+        old_page_navigations.each(function() {
+            $(this).replaceWith( page_navigation.clone( true ) );
+        });
+        
+        search_result.attr('start', start_index + 1);
         
         if ( ( (current_page) * ENTRY_PER_PAGE ) < result_data.length ) {
             last_index = current_page * ENTRY_PER_PAGE;
@@ -435,16 +467,18 @@ var build_search_result = (function() {
             var entry = result_data[ci],
                 li = $([
                     '<li>'
-                ,   '  <a href="' + entry.link + '#search_word=' + encoded_keyword_string + '" target="_blank">'
-                ,   escape_html( entry.title )
-                ,   '  </a><br />'
+                ,   '  <a target="_blank"></a><br />'
                 ,   escape_html( trunc_text( entry.body, search_keywords ) )
                 ,   '</li>'
                 ].join(''));
             
+            li.find('a').first().attr( 'href', entry.link + '#search_word=' + encoded_keyword_string ).text( entry.title );
+            
             search_result.append(li);
         }
         search_result.highlight( search_keywords );
+        
+        old_search_result.replaceWith( search_result );
     };
 })(); // end of build_search_result()
 
@@ -463,8 +497,8 @@ function search() {
         reg_keywords_list.push( get_reg_keywords( [ keyword ] ) );
     })
     
-    debug_log('keywords: ' + search_keywords.join(' '));
-    debug_log('[before] search_counter = ' + search_counter + ' result_data.length = ' + result_data.length);
+    debug_log( 'keywords: ' + search_keywords.join(' ') );
+    debug_log( '[before] search_counter = ' + search_counter + ' result_data.length = ' + result_data.length );
     for ( var ci = search_counter; ci < entries.length; ci ++ ) {
         var entry = entries[ ci ],
             is_match = true;
@@ -485,8 +519,8 @@ function search() {
         }
         search_counter ++;
     }
-    debug_log('entries.length = ' + entries.length);
-    debug_log('[after]  search_counter = ' + search_counter + ' result_data.length = ' + result_data.length);
+    debug_log( 'entries.length = ' + entries.length );
+    debug_log( '[after]  search_counter = ' + search_counter + ' result_data.length = ' + result_data.length );
     
     if ( result_data.length == 0 ) {
         if ( backnumber_list.length <= loaded_backnumber_counter ) {
@@ -548,19 +582,19 @@ function parse_backnumber( backnumber_html, backnumber_url ) {
                 
                 if ( 1 < body.find('div.entry-body-text').size() ) {
                     var error_message = '※ HTML が壊れている可能性あり ' + backnumber_url;
-                    console.error(error_message);
-                    debug_log(error_message);
-                    debug_log(entry);
-                    debug_log(title);
-                    debug_log(body);
-                    debug_log(link);
+                    console.error( error_message );
+                    debug_log( error_message );
+                    debug_log( entry );
+                    debug_log( title );
+                    debug_log( body );
+                    debug_log( link );
                 }
             });
         }
     }
     loaded_backnumber_counter ++;
-    debug_log('loaded_backnumber_counter: ' + loaded_backnumber_counter + ' / ' + backnumber_list.length + ': ' + backnumber_url);
-    debug_log('entries.length = ' + entries.length);
+    debug_log( 'loaded_backnumber_counter: ' + loaded_backnumber_counter + ' / ' + backnumber_list.length + ': ' + backnumber_url );
+    debug_log( 'entries.length = ' + entries.length );
 } // end of parse_backnumber()
 
 
@@ -568,10 +602,10 @@ var load_backnumber = (function() {
     function load_request( backnumber_info ) {
         var backnumber_url = backnumber_info.backnumber_url;
         
-        debug_log('load backnumber: ' + backnumber_url);
+        debug_log( 'load backnumber: ' + backnumber_url );
         
         if ( backnumber_map[ backnumber_url ] ) {
-            debug_log('*** duplicate *** ' + backnumber_url); // ここにはこないはず
+            debug_log( '*** duplicate *** ' + backnumber_url ); // ここにはこないはず
             return;
         }
         backnumber_map[ backnumber_url ] = backnumber_info;
@@ -589,8 +623,8 @@ var load_backnumber = (function() {
         })
         .fail(function( jqXHR, textStatus, errorThrown ) {
             var error_text = backnumber_url + ' が読み込めませんでした (status: ' + textStatus + ')';
-            console.error(error_text);
-            debug_log(error_text);
+            console.error( error_text );
+            debug_log( error_text );
             backnumber_map[ backnumber_url ].backnumber_html = '<html><body>' + error_text + '</body></html>';
         })
         .always(function( jqXHR, textStatus ) {
@@ -663,7 +697,7 @@ function load_archive_file( archive_file_path ) {
     backnumber_queue = [];
     entries = [];
     
-    debug_log('load archive: ' + archive_file_path);
+    debug_log( 'load archive: ' + archive_file_path );
     
     $.ajax({
         url: archive_file_path
@@ -793,11 +827,17 @@ function set_cocolog_ajax_search_options( options ) {
             MAX_CONCURRENT_LOAD = number;
         }
     }
+    if ( typeof options.display_search_form != 'undefined' ) {
+        DISPLAY_SEARCH_FORM = options.display_search_form;
+    }
     if ( options.search_box_id ) {
         SEARCH_BOX_ID = options.search_box_id;
     }
     if ( options.search_credit_id ) {
         SEARCH_CREDIT_ID = options.search_credit_id;
+    }
+    if ( options.search_container_template ) {
+        SEARCH_CONTAINER_TEMPLATE = options.search_container_template;
     }
 } // end of set_cocolog_ajax_search_options()
 
