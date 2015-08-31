@@ -96,7 +96,7 @@ var is_lookahead = true,
     search_counter = 0,
     matched_entry_map = {},
     result_data = [],
-    current_page = 1,
+    current_page = 1;
 //}
 
 
