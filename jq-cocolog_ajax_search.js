@@ -58,17 +58,16 @@ var is_lookahead = true,
     last_archive_file_path = null,
     requested_backnumber_counter = 0,
     loaded_backnumber_counter = 0,
-    backnumber_url_list = [],
+    backnumber_list = [],
     backnumber_queue = [],
     backnumber_map = {},
     entries = [],
-    search_keyword = '',
+    search_keywords = [],
     search_counter = 0,
     matched_entry_map = {},
     result_data = [],
     current_page = 1,
-    current_notice = '',
-    current_search_keywords = [];
+    current_notice = '';
 //}
 
 
@@ -160,7 +159,7 @@ function get_keywords( search_query ) {
     var fragments = search_query.split(' '),
         keywords = [];
     
-    $.each(fragments, function(index, fragment) {
+    $.each(fragments, function( index, fragment ) {
         if ( fragment ) {
             keywords.push( fragment );
         }
@@ -357,7 +356,7 @@ function build_search_result_container() {
     var search_form = search_container.find('form.cocolog_ajax_search'),
         search_box = search_form.find('input[name="search_box"]');
     
-    search_box.val( get_keywords( search_keyword ).join(' ') );
+    search_box.val( search_keywords.join(' ') );
     
     search_form.submit(function () {
         cocologAjaxSearch( search_box.val() );
@@ -393,18 +392,18 @@ var build_search_result = (function() {
         };
     })();
     
-    return function( result_data, keywords, notice ) {
+    return function( result_data, notice ) {
         if ( ! result_content ) {
             return;
         }
         current_notice = notice;
-        current_search_keywords = keywords;
         
         var search_container = result_content.find('div.search-result-container').first(),
             search_result = search_container.find('ol.search-result').first(),
             page_navigation = search_container.find('div.page-navigation'),
             start_index = (current_page - 1) * ENTRY_PER_PAGE,
-            last_index = result_data.length;
+            last_index = result_data.length,
+            encoded_keyword_string = encodeURIComponent( search_keywords.join(' ') );
         
         update_search_notice( notice );
         page_navigation.empty();
@@ -436,42 +435,42 @@ var build_search_result = (function() {
             var entry = result_data[ci],
                 li = $([
                     '<li>'
-                ,   '  <a href="' + entry.link + '#search_word=' + encodeURIComponent(search_keyword) + '" target="_blank">'
+                ,   '  <a href="' + entry.link + '#search_word=' + encoded_keyword_string + '" target="_blank">'
                 ,   escape_html( entry.title )
                 ,   '  </a><br />'
-                ,   escape_html( trunc_text( entry.body, keywords ) )
+                ,   escape_html( trunc_text( entry.body, search_keywords ) )
                 ,   '</li>'
                 ].join(''));
             
-            li.highlight( keywords );
-            
             search_result.append(li);
         }
+        search_result.highlight( search_keywords );
     };
 })(); // end of build_search_result()
 
 
 function search() {
-    var is_hit = false,
-        keywords = get_keywords( search_keyword );
+    var is_hit = false;
     
-    if ( keywords.length < 1 ) {
+    if ( search_keywords.length < 1 ) {
         return;
     }
     
     var search_notice = '',
         reg_keywords_list = [];
     
-    $.each(keywords, function(index, keyword) {
+    $.each(search_keywords, function( index, keyword ) {
         reg_keywords_list.push( get_reg_keywords( [ keyword ] ) );
     })
     
+    debug_log('keywords: ' + search_keywords.join(' '));
+    debug_log('[before] search_counter = ' + search_counter + ' result_data.length = ' + result_data.length);
     for ( var ci = search_counter; ci < entries.length; ci ++ ) {
         var entry = entries[ ci ],
             is_match = true;
         
-        $.each(reg_keywords_list, function(index, reg) {
-            if ( ( ! reg.test( entry.title ) ) && ( ! reg.test( entry.body ) ) ) {
+        $.each(reg_keywords_list, function( index, reg ) {
+            if ( ( ! entry.title.match( reg ) ) && ( ! entry.body.match( reg ) ) ) {
                 is_match = false;
                 return false;
             }
@@ -486,26 +485,28 @@ function search() {
         }
         search_counter ++;
     }
+    debug_log('entries.length = ' + entries.length);
+    debug_log('[after]  search_counter = ' + search_counter + ' result_data.length = ' + result_data.length);
     
     if ( result_data.length == 0 ) {
-        if ( backnumber_url_list.length <= loaded_backnumber_counter ) {
+        if ( backnumber_list.length <= loaded_backnumber_counter ) {
             search_notice = '一致しませんでした';
             is_hit = true;
         } 
         else {
-            search_notice = '検索中... ' + Math.floor( ( loaded_backnumber_counter * 100 ) / backnumber_url_list.length )  + '%';
+            search_notice = '検索中... ' + Math.floor( ( loaded_backnumber_counter * 100 ) / backnumber_list.length )  + '%';
         }
     }
     else {
-        if ( backnumber_url_list.length <= loaded_backnumber_counter ) {
+        if ( backnumber_list.length <= loaded_backnumber_counter ) {
             search_notice = '検索結果（' + result_data.length + '件ヒット）';
         }
         else {
-            search_notice = '検索中...' + Math.floor( ( loaded_backnumber_counter * 100 )  / backnumber_url_list.length ) + '%（' + result_data.length + '件ヒット）';
+            search_notice = '検索中...' + Math.floor( ( loaded_backnumber_counter * 100 )  / backnumber_list.length ) + '%（' + result_data.length + '件ヒット）';
         }
     }
     if (is_hit) {
-        build_search_result( result_data, keywords, search_notice );
+        build_search_result( result_data, search_notice );
     }
     else {
         update_search_notice( search_notice );
@@ -545,8 +546,10 @@ function parse_backnumber( backnumber_html, backnumber_url ) {
                 ,   link : link.attr('href')
                 });
                 
-                if ( DEBUG && 1 < body.find('div.entry-body-text').size() ) {
-                    debug_log('※ HTML が壊れている可能性あり ' + backnumber_url);
+                if ( 1 < body.find('div.entry-body-text').size() ) {
+                    var error_message = '※ HTML が壊れている可能性あり ' + backnumber_url;
+                    console.error(error_message);
+                    debug_log(error_message);
                     debug_log(entry);
                     debug_log(title);
                     debug_log(body);
@@ -556,23 +559,24 @@ function parse_backnumber( backnumber_html, backnumber_url ) {
         }
     }
     loaded_backnumber_counter ++;
-    debug_log('loaded_backnumber_counter: ' + loaded_backnumber_counter + ' / ' + backnumber_url_list.length + ': ' + backnumber_url);
+    debug_log('loaded_backnumber_counter: ' + loaded_backnumber_counter + ' / ' + backnumber_list.length + ': ' + backnumber_url);
+    debug_log('entries.length = ' + entries.length);
 } // end of parse_backnumber()
 
 
 var load_backnumber = (function() {
-    function load_request( backnumber_url ) {
+    function load_request( backnumber_info ) {
+        var backnumber_url = backnumber_info.backnumber_url;
+        
         debug_log('load backnumber: ' + backnumber_url);
         
         if ( backnumber_map[ backnumber_url ] ) {
             debug_log('*** duplicate *** ' + backnumber_url); // ここにはこないはず
             return;
         }
-        backnumber_queue.push({
-            backnumber_url : backnumber_url
-        ,   backnumber_html : undefined
-        });
-        backnumber_map[ backnumber_url ] = backnumber_queue[ backnumber_queue.length - 1 ];
+        backnumber_map[ backnumber_url ] = backnumber_info;
+        
+        backnumber_queue.push( backnumber_info );
         
         $.ajax({
             url: backnumber_url
@@ -608,12 +612,12 @@ var load_backnumber = (function() {
     }
     
     return function() {
-        if ( backnumber_url_list.length <= loaded_backnumber_counter ) {
+        if ( backnumber_list.length <= loaded_backnumber_counter ) {
             search();
             return;
         } 
-        for ( var ci = requested_backnumber_counter, limit = Math.min( backnumber_url_list.length, requested_backnumber_counter + MAX_CONCURRENT_LOAD ); ci < limit; ci++ ) {
-            load_request( backnumber_url_list[ ci ] );
+        for ( var ci = requested_backnumber_counter, limit = Math.min( backnumber_list.length, requested_backnumber_counter + MAX_CONCURRENT_LOAD ); ci < limit; ci++ ) {
+            load_request( backnumber_list[ ci ] );
         }
     };
 })(); // end of load_backnumber()
@@ -632,7 +636,12 @@ function parse_archive( archive_html, archive_file_path ) {
     }
     
     page_container.find( link_selector ).each(function() {
-        backnumber_url_list.push( $(this).attr('href') );
+        var backnumber_url = $(this).attr('href');
+        
+        backnumber_list.push({
+            backnumber_url : backnumber_url
+        ,   backnumber_html : undefined
+        });
     });
     
     load_backnumber();
@@ -640,7 +649,7 @@ function parse_archive( archive_html, archive_file_path ) {
 
 
 function load_archive_file( archive_file_path ) {
-    if ( ( archive_file_path == last_archive_file_path ) && ( 0 < backnumber_url_list.length ) ) {
+    if ( ( archive_file_path == last_archive_file_path ) && ( 0 < backnumber_list.length ) ) {
         load_backnumber();
         return;
     }
@@ -649,10 +658,10 @@ function load_archive_file( archive_file_path ) {
     
     requested_backnumber_counter = 0;
     loaded_backnumber_counter = 0;
-    backnumber_url_list = [];
-    entries = [];
+    backnumber_list = [];
     backnumber_map = {};
     backnumber_queue = [];
+    entries = [];
     
     debug_log('load archive: ' + archive_file_path);
     
@@ -678,7 +687,8 @@ function lookahead_backnumbers() {
         return;
     }
     is_lookahead = false;
-    search_keyword = '';
+    
+    search_keywords = [];
     search_counter = 0;
     
     var archive_file_path = get_archive_file_path();
@@ -695,12 +705,16 @@ function cocologAjaxSearch() {
         text = arguments[0];
     }
     else {
+        // オリジナルの function cocologAjaxSearch( archive_file_path, text ) 互換用
+        // ※当初は第1引数にアーカイブファイルの PATH を明示していたが、その後、第1引数は無視して自動的に取得するようになった
         //archive_file_path = arguments[1];
-        //※ オリジナルの cocologAjaxSearch() は当初、第1引数に archive_file_path を明示していたが、その後自動的に取得するようになったため、第1引数は無視されるようになった。
         text = arguments[1];
     }
     
-    search_keyword = text;
+    search_keywords = get_keywords( text );
+    if ( search_keywords.length < 1 ) {
+        return;
+    }
     search_counter = 0;
     current_page = 1;
     result_data = [];
@@ -719,7 +733,7 @@ function change_page( new_page ) {
     
     current_page = new_page;
     
-    build_search_result( result_data, current_search_keywords, current_notice );
+    build_search_result( result_data, current_notice );
 } // end of change_page()
 
 
