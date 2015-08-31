@@ -97,7 +97,6 @@ var is_lookahead = true,
     matched_entry_map = {},
     result_data = [],
     current_page = 1,
-    current_notice = '';
 //}
 
 
@@ -393,9 +392,7 @@ var build_search_result = (function() {
         
         return function( page_number, navi_text ) {
             return navi_link_template.clone( true ).text( navi_text ).click(function () {
-                setTimeout(function() {
-                    change_page( page_number );
-                }, 1);
+                change_page( page_number );
                 return false;
             });
         };
@@ -413,7 +410,6 @@ var build_search_result = (function() {
         if ( ! result_content ) {
             return;
         }
-        current_notice = notice;
         
         var search_container = result_content.find('div.search-result-container').first(),
             old_page_navigations = search_container.find('div.page-navigation').empty(),
@@ -483,7 +479,7 @@ var build_search_result = (function() {
 })(); // end of build_search_result()
 
 
-function search() {
+function search( is_page_change ) {
     var is_hit = false;
     
     if ( search_keywords.length < 1 ) {
@@ -539,7 +535,7 @@ function search() {
             search_notice = '検索中...' + Math.floor( ( loaded_backnumber_counter * 100 )  / backnumber_list.length ) + '%（' + result_data.length + '件ヒット）';
         }
     }
-    if (is_hit) {
+    if ( is_hit || is_page_change ) {
         build_search_result( result_data, search_notice );
     }
     else {
@@ -767,7 +763,7 @@ function change_page( new_page ) {
     
     current_page = new_page;
     
-    build_search_result( result_data, current_notice );
+    search( true );
 } // end of change_page()
 
 
