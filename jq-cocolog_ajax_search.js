@@ -38,7 +38,7 @@ $(function() {
 
 //{ ■ 定数
 var SCRIPT_NAME = 'ココログ用全文検索',
-    RELATED_URL = 'http://furyu.tea-nifty.com/annex/';
+    RELATED_URL = 'http://furyu.tea-nifty.com/annex/2015/09/--jquery-b19e.html';
 //}
 
 //{ ■ オプション
@@ -48,6 +48,7 @@ var DEBUG = false,
     ENTRY_PER_PAGE = 20,
     MAX_CONCURRENT_LOAD = 3,
     DISPLAY_SEARCH_FORM = true,
+    LOOK_AHEAD = true,
     SEARCH_BOX_ID = 'search_box',
     SEARCH_CREDIT_ID = 'search_credit',
     SEARCH_CONTAINER_TEMPLATE = [
@@ -422,8 +423,9 @@ var build_search_result = (function() {
         /*
         // 【覚書】
         //   DOMツリー上に存在したままノード（page_navigation等）の中身を更新した場合、異常に時間がかかるケースがあった。
-        //   ※特に、テキストノードの操作は酷く時間がかかる模様。
+        //   特に、通常のノードとテキストノードとを交互に挿入するようなケースでは酷く時間がかかる模様。
         //   このため、複製した（DOMツリーからは切り離された状態の）ノードを更新した上で、元のノードと入れ替えている。
+        //   → その後、特定の拡張機能が原因であることが判明（Google Chrome 用「はちまバスター｣など）。
         */
         
         update_search_notice( notice );
@@ -713,7 +715,7 @@ function load_archive_file( archive_file_path ) {
 
 
 function lookahead_backnumbers() {
-    if ( ! is_lookahead ) {
+    if ( ( ! LOOK_AHEAD ) || ( ! is_lookahead ) ) {
         return;
     }
     is_lookahead = false;
@@ -737,7 +739,7 @@ function cocologAjaxSearch() {
     else {
         // オリジナルの function cocologAjaxSearch( archive_file_path, text ) 互換用
         // ※当初は第1引数にアーカイブファイルの PATH を明示していたが、その後、第1引数は無視して自動的に取得するようになった
-        //archive_file_path = arguments[1];
+        //archive_file_path = arguments[0];
         text = arguments[1];
     }
     
@@ -825,6 +827,9 @@ function set_cocolog_ajax_search_options( options ) {
     }
     if ( typeof options.display_search_form != 'undefined' ) {
         DISPLAY_SEARCH_FORM = options.display_search_form;
+    }
+    if ( typeof options.look_ahead != 'undefined' ) {
+        LOOK_AHEAD = options.look_ahead;
     }
     if ( options.search_box_id ) {
         SEARCH_BOX_ID = options.search_box_id;
